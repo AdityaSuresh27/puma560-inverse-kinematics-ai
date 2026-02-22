@@ -29,12 +29,12 @@ fprintf('Target dataset size: %d samples\n', n_samples);
 
 % Joint limits (degrees)
 joint_limits = [
-    -160, 160;   % θ₁
-    -225, 45;    % θ₂
-    -45, 225;    % θ₃
-    -110, 170;   % θ₄
-    -100, 100;   % θ₅
-    -266, 266    % θ₆
+    -160, 160;   % theta1
+    -225, 45;    % theta2
+    -45, 225;    % theta3
+    -110, 170;   % theta4
+    -100, 100;   % theta5
+    -266, 266    % theta6
 ];
 
 % Dataset splits
@@ -49,7 +49,7 @@ preferred_configs = [1, 2, 3, 4];  % Configs to try (1-8)
 fprintf('Dataset split: %.0f%% train, %.0f%% validation, %.0f%% test\n', ...
         train_ratio*100, val_ratio*100, test_ratio*100);
 
-% Display configuration info (no ternary operators in MATLAB)
+% FIX 1: Replaced invalid ternary operator with if/else
 if use_multiple_configs
     config_str = sprintf('[%s]', num2str(preferred_configs));
 else
@@ -62,30 +62,30 @@ fprintf('Testing functions...\n');
 try
     % Test FK (silent mode)
     [T_test, ~] = fPUMA(0, 0, 0, 0, 0, 0, false);
-    fprintf('✓ fPUMA working (silent mode)\n');
-    
+    fprintf('+ fPUMA working (silent mode)\n');
+
     % Test IK (silent mode)
     [J_test, ~, valid_test, ~] = iPUMA(1,0,0, 0,1,0, 0,0,1, ...
                                        411.50, 139.70, 1160.10, false, 1);
     if valid_test
-        fprintf('✓ iPUMA working (silent mode)\n');
+        fprintf('+ iPUMA working (silent mode)\n');
     else
         error('iPUMA test failed - check joint limits');
     end
-    
+
     % Test FK with verbose
     fprintf('\nTesting verbose mode (should show output):\n');
     [T_test2, ~] = fPUMA(30, -20, 40, 0, 30, 0, true);
-    
+
 catch ME
-    fprintf('✗ Function test failed: %s\n', ME.message);
+    fprintf('X Function test failed: %s\n', ME.message);
     fprintf('Make sure iPUMA.m and fPUMA.m are in current directory.\n');
     fprintf('Stack trace:\n');
     disp(ME.stack);
     return;
 end
 
-fprintf('\n✓ All tests passed!\n\n');
+fprintf('\n+ All tests passed!\n\n');
 
 %% Initialize storage
 inputs = zeros(n_samples, 12);
@@ -115,14 +115,14 @@ tic;
 
 while sample_count < n_samples && stats.attempted < max_attempts
     stats.attempted = stats.attempted + 1;
-    
+
     % Progress indicator
     current_percent = floor(100 * sample_count / n_samples);
     if current_percent > last_percent && mod(current_percent, 5) == 0
         fprintf('%d%%...', current_percent);
         last_percent = current_percent;
     end
-    
+
     % Generate random configuration (middle 80% to avoid extremes)
     theta = zeros(1, 6);
     for j = 1:6
@@ -132,12 +132,12 @@ while sample_count < n_samples && stats.attempted < max_attempts
         theta(j) = (range_min + margin) + ...
                    ((range_max - margin) - (range_min + margin)) * rand();
     end
-    
+
     % Forward kinematics (SILENT MODE)
     try
         [T06, ~] = fPUMA(theta(1), theta(2), theta(3), ...
                          theta(4), theta(5), theta(6), false);
-        
+
         nx = T06(1,1); ny = T06(2,1); nz = T06(3,1);
         ox = T06(1,2); oy = T06(2,2); oz = T06(3,2);
         ax = T06(1,3); ay = T06(2,3); az = T06(3,3);
@@ -146,39 +146,44 @@ while sample_count < n_samples && stats.attempted < max_attempts
         stats.fk_errors = stats.fk_errors + 1;
         continue;
     end
-    
+
     % Inverse kinematics - Try multiple configurations
     ik_success = false;
     best_config = 0;
     best_theta = [];
     best_error = inf;
-    
-    configs_to_try = use_multiple_configs ? preferred_configs : 1;
-    
+
+    % FIX 2: Replaced invalid ternary operator with if/else
+    if use_multiple_configs
+        configs_to_try = preferred_configs;
+    else
+        configs_to_try = 1;
+    end
+
     for config = configs_to_try
         try
             % SILENT MODE - no printing
             [theta_ik, ~, valid, ~] = iPUMA(nx, ny, nz, ox, oy, oz, ...
                                             ax, ay, az, Px, Py, Pz, ...
                                             false, config);
-            
+
             if ~valid
                 continue;
             end
-            
+
             % Verify with FK (more robust than angle comparison)
             [T_verify, ~] = fPUMA(theta_ik(1), theta_ik(2), theta_ik(3), ...
                                   theta_ik(4), theta_ik(5), theta_ik(6), false);
-            
+
             % Position error
             pos_error = norm(T_verify(1:3,4) - T06(1:3,4));
-            
+
             % Rotation error (Frobenius norm)
             rot_error = norm(T_verify(1:3,1:3) - T06(1:3,1:3), 'fro');
-            
+
             % Combined error metric
             combined_error = pos_error + 100 * rot_error;
-            
+
             % Accept if within tolerance
             if pos_error < 1.0 && rot_error < 0.01  % 1mm position, tight rotation
                 if combined_error < best_error
@@ -188,13 +193,13 @@ while sample_count < n_samples && stats.attempted < max_attempts
                     ik_success = true;
                 end
             end
-            
+
         catch ME
             % IK failed for this config, try next
             continue;
         end
     end
-    
+
     % Store if valid solution found
     if ik_success
         sample_count = sample_count + 1;
@@ -310,7 +315,7 @@ save(mat_filename, 'inputs', 'outputs', 'configs_used', ...
      'test_inputs', 'test_outputs', ...
      'train_idx', 'val_idx', 'test_idx', ...
      'normalization', 'stats', 'joint_limits');
-fprintf('✓ Saved: %s\n', mat_filename);
+fprintf('+ Saved: %s\n', mat_filename);
 
 %% Save .csv file
 csv_filename = fullfile(save_dir, 'puma560_dataset.csv');
@@ -319,7 +324,7 @@ header = {'nx', 'ny', 'nz', 'ox', 'oy', 'oz', 'ax', 'ay', 'az', 'Px', 'Py', 'Pz'
           'theta1', 'theta2', 'theta3', 'theta4', 'theta5', 'theta6', 'config'};
 csv_table = array2table(full_dataset, 'VariableNames', header);
 writetable(csv_table, csv_filename);
-fprintf('✓ Saved: %s\n', csv_filename);
+fprintf('+ Saved: %s\n', csv_filename);
 
 %% Display statistics
 fprintf('\n========================================\n');
@@ -350,22 +355,21 @@ fprintf('\n');
 fprintf('Creating visualization...\n');
 try
     fig = figure('Name', 'Dataset Analysis v2.1', 'Position', [100, 100, 1400, 900]);
-    
+
     % Joint distributions
     for j = 1:6
         subplot(3, 4, j);
         histogram(outputs(:, j), 50, 'FaceColor', 'b', 'EdgeColor', 'k');
-        xlabel(sprintf('\\theta_%d (deg)', j), 'FontWeight', 'bold');
+        xlabel(sprintf('theta_%d (deg)', j), 'FontWeight', 'bold');
         ylabel('Frequency');
         title(sprintf('Joint %d', j), 'FontWeight', 'bold');
         grid on;
-        % Add limits
         hold on;
         xline(joint_limits(j,1), 'r--', 'LineWidth', 1.5);
         xline(joint_limits(j,2), 'r--', 'LineWidth', 1.5);
         hold off;
     end
-    
+
     % Position distributions
     subplot(3, 4, 7);
     histogram(inputs(:, 10), 50, 'FaceColor', 'r', 'EdgeColor', 'k');
@@ -373,21 +377,21 @@ try
     ylabel('Frequency');
     title('X Position', 'FontWeight', 'bold');
     grid on;
-    
+
     subplot(3, 4, 8);
     histogram(inputs(:, 11), 50, 'FaceColor', 'g', 'EdgeColor', 'k');
     xlabel('Y (mm)', 'FontWeight', 'bold');
     ylabel('Frequency');
     title('Y Position', 'FontWeight', 'bold');
     grid on;
-    
+
     subplot(3, 4, 9);
     histogram(inputs(:, 12), 50, 'FaceColor', 'b', 'EdgeColor', 'k');
     xlabel('Z (mm)', 'FontWeight', 'bold');
     ylabel('Frequency');
     title('Z Position', 'FontWeight', 'bold');
     grid on;
-    
+
     % 3D scatter
     subplot(3, 4, 10:12);
     scatter3(inputs(:, 10), inputs(:, 11), inputs(:, 12), 2, inputs(:, 12), 'filled');
@@ -398,16 +402,16 @@ try
     colorbar;
     grid on;
     view(45, 30);
-    
+
     sgtitle('PUMA 560 Dataset Analysis v2.1', 'FontSize', 16, 'FontWeight', 'bold');
-    
+
     % Save figure
     png_filename = fullfile(save_dir, 'dataset_visualization.png');
     print(fig, png_filename, '-dpng', '-r150');
-    fprintf('✓ Saved: %s\n', png_filename);
-    
+    fprintf('+ Saved: %s\n', png_filename);
+
 catch ME
-    fprintf('⚠ Could not save visualization: %s\n', ME.message);
+    fprintf('WARNING: Could not save visualization: %s\n', ME.message);
     fprintf('  (Data files are saved successfully)\n');
 end
 
@@ -415,11 +419,10 @@ end
 if use_multiple_configs && sum(stats.config_counts > 0) > 1
     try
         fig2 = figure('Name', 'Configuration Distribution', 'Position', [150, 150, 800, 500]);
-        
-        % Only plot configs that were actually used
+
         used_configs = find(stats.config_counts > 0);
         config_labels = arrayfun(@(x) sprintf('Config %d', x), used_configs, 'UniformOutput', false);
-        
+
         bar(used_configs, stats.config_counts(used_configs));
         xlabel('Configuration', 'FontWeight', 'bold');
         ylabel('Number of Samples', 'FontWeight', 'bold');
@@ -427,13 +430,12 @@ if use_multiple_configs && sum(stats.config_counts > 0) > 1
         grid on;
         set(gca, 'XTick', used_configs);
         set(gca, 'XTickLabel', config_labels);
-        
-        % Save
+
         png_filename2 = fullfile(save_dir, 'config_distribution.png');
         print(fig2, png_filename2, '-dpng', '-r150');
-        fprintf('✓ Saved: %s\n', png_filename2);
+        fprintf('+ Saved: %s\n', png_filename2);
     catch ME
-        fprintf('⚠ Could not save config distribution: %s\n', ME.message);
+        fprintf('WARNING: Could not save config distribution: %s\n', ME.message);
     end
 end
 
@@ -443,7 +445,9 @@ fid = fopen(txt_filename, 'w');
 fprintf(fid, '========================================\n');
 fprintf(fid, 'PUMA 560 Dataset Statistics v2.1\n');
 fprintf(fid, '========================================\n\n');
-fprintf(fid, 'Generated: %s\n\n', datestr(now));
+
+% FIX 3: Replaced deprecated datestr(now) with datetime
+fprintf(fid, 'Generated: %s\n\n', char(datetime('now', 'Format', 'yyyy-MM-dd HH:mm:ss')));
 
 fprintf(fid, 'Dataset Size:\n');
 fprintf(fid, '  Total:      %d samples\n', sample_count);
@@ -488,7 +492,7 @@ fprintf(fid, '  Z   | %9.2f | %9.2f | %9.2f | %9.2f\n', ...
         input_mean(12), input_std(12), input_min(12), input_max(12));
 
 fclose(fid);
-fprintf('✓ Saved: %s\n', txt_filename);
+fprintf('+ Saved: %s\n', txt_filename);
 
 %% Final summary
 fprintf('\n========================================\n');
@@ -513,11 +517,11 @@ end
 fprintf('\n');
 
 fprintf('Key Improvements in v2.1:\n');
-fprintf('  ✓ Silent FK/IK (10-20x faster)\n');
-fprintf('  ✓ Multiple IK configurations (%d tested per sample)\n', length(preferred_configs));
-fprintf('  ✓ FK-based validation (position < 1mm, rotation tight)\n');
-fprintf('  ✓ Better angle handling\n');
-fprintf('  ✓ Configuration tracking\n\n');
+fprintf('  + Silent FK/IK (10-20x faster)\n');
+fprintf('  + Multiple IK configurations (%d tested per sample)\n', length(preferred_configs));
+fprintf('  + FK-based validation (position < 1mm, rotation tight)\n');
+fprintf('  + Better angle handling\n');
+fprintf('  + Configuration tracking\n\n');
 
 fprintf('CSV Structure (19 columns):\n');
 fprintf('  Columns 1-12:  Inputs (nx,ny,nz, ox,oy,oz, ax,ay,az, Px,Py,Pz)\n');
@@ -536,5 +540,5 @@ fprintf('  X = df.iloc[:, 0:12].values\n');
 fprintf('  Y = df.iloc[:, 12:18].values\n');
 fprintf('  configs = df.iloc[:, 18].values\n\n');
 
-fprintf('Ready for ANN training! 🚀\n');
+fprintf('Ready for ANN training!\n');
 fprintf('Expected improvement: Higher success rate, better workspace coverage\n');
