@@ -63,9 +63,22 @@ class ClassicalANNLoader:
             return None, None, None, None
         
         try:
-            ckpt = torch.load(model_path, map_location=device)
-            
-            # Reconstruct model architecture (must match train_puma560.py)
+            ckpt = torch.load(model_path, map_location=device, weights_only=False)
+
+            # ResBlock must match train_puma560_v4_FINAL.py exactly:
+            # keys are  blocks.N.block.* and blocks.N.act  (not blocks.N.*)
+            class _ResBlock(nn.Module):
+                def __init__(self, dim, dropout=0.05):
+                    super().__init__()
+                    self.block = nn.Sequential(
+                        nn.Linear(dim, dim), nn.LayerNorm(dim), nn.GELU(),
+                        nn.Dropout(dropout),
+                        nn.Linear(dim, dim), nn.LayerNorm(dim),
+                    )
+                    self.act = nn.GELU()
+                def forward(self, x):
+                    return self.act(x + self.block(x))
+
             class ShoulderNet(nn.Module):
                 def __init__(self, n_in=3, hidden=256, n_blocks=6, dropout=0.05):
                     super().__init__()
@@ -73,29 +86,16 @@ class ClassicalANNLoader:
                         nn.Linear(n_in, hidden), nn.LayerNorm(hidden), nn.GELU(),
                     )
                     self.blocks = nn.ModuleList([
-                        self._ResBlock(hidden, dropout) for _ in range(n_blocks)
+                        _ResBlock(hidden, dropout) for _ in range(n_blocks)
                     ])
                     self.head = nn.Linear(hidden, 6)
-                    for m in self.modules():
-                        if isinstance(m, nn.Linear):
-                            nn.init.kaiming_normal_(m.weight, nonlinearity='relu')
-                            if m.bias is not None:
-                                nn.init.zeros_(m.bias)
-                
-                @staticmethod
-                def _ResBlock(dim, dropout=0.1):
-                    return nn.Sequential(
-                        nn.Linear(dim, dim), nn.LayerNorm(dim), nn.GELU(),
-                        nn.Dropout(dropout),
-                        nn.Linear(dim, dim), nn.LayerNorm(dim),
-                    )
-                
+
                 def forward(self, x):
                     x = self.stem(x)
                     for blk in self.blocks:
-                        x = blk(x) + x
+                        x = blk(x)
                     return self.head(x)
-            
+
             model = ShoulderNet(n_in=3, hidden=256, n_blocks=6)
             if 'model_state' in ckpt:
                 model.load_state_dict(ckpt['model_state'])
@@ -121,10 +121,14 @@ class ClassicalANNLoader:
 def main():
     parser = argparse.ArgumentParser(description="QNN Training & Comparison")
     parser.add_argument("--dataset", default="puma560_dataset.csv")
-    parser.add_argument("--epochs", type=int, default=500)
-    parser.add_argument("--lr", type=float, default=1e-3)
-    parser.add_argument("--batch", type=int, default=256)
-    parser.add_argument("--patience", type=int, default=50)
+    parser.add_argument("--epochs", type=int, default=200)
+    parser.add_argument("--lr", type=float, default=3e-3)
+    parser.add_argument("--batch", type=int, default=128)
+    parser.add_argument("--patience", type=int, default=40)
+    parser.add_argument("--n-qubits", type=int, default=4,
+                        help="Number of qubits (4=fast, 6=more expressive)")
+    parser.add_argument("--n-qlayers", type=int, default=3,
+                        help="Depth of quantum data re-uploading circuit")
     parser.add_argument("--n-eval", type=int, default=200)
     parser.add_argument("--no-gpu", action="store_true")
     parser.add_argument("--no-plots", action="store_true")
@@ -143,10 +147,11 @@ def main():
     device = torch.device("cpu" if (args.no_gpu or not torch.cuda.is_available()) else "cuda")
     
     print(SEP)
-    print("PUMA 560 IK: Quantum vs Classical Comparison")
+    print("PUMA 560 IK: Quantum vs Classical Comparison  (QNN v2.0)")
     print(SEP); print()
     print(f"Device: {device}")
     print(f"Dataset: {args.dataset}")
+    print(f"Quantum: {args.n_qubits} qubits, {args.n_qlayers} layers")
     print(f"Epochs: {args.epochs} | LR: {args.lr} | Batch: {args.batch}\n")
     
     # ── [0] Load dataset ───────────────────────────────────────────────
@@ -190,23 +195,34 @@ def main():
     P5_tr_n_val = P5_tr_n[val_idx]
     Y_tr_sc_train = Y_train_sc[train_idx]
     Y_tr_sc_val = Y_train_sc[val_idx]
+
+    # Raw (un-normalised) wrist centres for FK loss
+    P5_tr_raw_train = P5_train[train_idx]
+    P5_tr_raw_val = P5_train[val_idx]
     
     print(f"  Train/Val split: {len(train_idx)} / {len(val_idx)}\n")
     
     # ── [2] Build QNN ──────────────────────────────────────────────────
-    print("[2] Building Hybrid QNN...")
-    qnn = HybridQNN(n_qubits=3, n_vqc_layers=3, classical_hidden=128)
-    n_params = sum(p.numel() for p in qnn.parameters())
-    print(f"  Architecture: Quantum(3q,3l) + Classical(256→128→6)")
-    print(f"  Parameters: {n_params:,}\n")
+    print("[2] Building Hybrid QNN v2.0...")
+    qnn = HybridQNN(n_qubits=args.n_qubits, n_qlayers=args.n_qlayers,
+                    hidden=256, n_res_blocks=4, dropout=0.05)
+    n_q_params = sum(p.numel() for n, p in qnn.named_parameters()
+                     if 'quantum' in n or 'input_scaling' in n)
+    n_c_params = sum(p.numel() for n, p in qnn.named_parameters()
+                     if 'quantum' not in n and 'input_scaling' not in n)
+    n_params = n_q_params + n_c_params
+    print(f"  Architecture: Quantum({args.n_qubits}q,{args.n_qlayers}l) "
+          f"+ skip + Classical(256×4 ResBlocks)")
+    print(f"  Quantum params: {n_q_params:,} | Classical params: {n_c_params:,} "
+          f"| Total: {n_params:,}\n")
     
     # ── [3] Train QNN ──────────────────────────────────────────────────
     print(f"[3] Training QNN ({args.epochs} epochs)...")
     t_start = time.time()
     
     best_state, hist = train_qnn(
-        qnn, P5_tr_n_train, Y_tr_sc_train,
-        P5_tr_n_val, Y_tr_sc_val,
+        qnn, P5_tr_n_train, Y_tr_sc_train, P5_tr_raw_train,
+        P5_tr_n_val, Y_tr_sc_val, P5_tr_raw_val,
         epochs=args.epochs, lr=args.lr, batch_size=args.batch,
         patience=args.patience, device=device
     )
@@ -354,7 +370,9 @@ def main():
         'P5_mean': P5_mean,
         'P5_std': P5_std,
         'history': hist,
-        'architecture': 'HybridQNN_3q_3l',
+        'architecture': f'HybridQNN_v2_{args.n_qubits}q_{args.n_qlayers}l',
+        'n_qubits': args.n_qubits,
+        'n_qlayers': args.n_qlayers,
         'train_time': train_time,
     }, 'puma560_qnn_hybrid_v1.pt')
     

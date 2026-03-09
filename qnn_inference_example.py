@@ -59,17 +59,19 @@ def example_qnn_inference():
         return
     
     print(f"Loading QNN from {model_path}...")
-    ckpt = torch.load(model_path, map_location='cpu')
+    ckpt = torch.load(model_path, map_location='cpu', weights_only=False)
     
-    # Reconstruct model
-    model = HybridQNN(n_qubits=3, n_vqc_layers=3, classical_hidden=128)
+    # Reconstruct model (read architecture from checkpoint)
+    nq = ckpt.get('n_qubits', 4)
+    nl = ckpt.get('n_qlayers', 3)
+    model = HybridQNN(n_qubits=nq, n_qlayers=nl, hidden=256, n_res_blocks=4)
     model.load_state_dict(ckpt['model_state'])
     model.eval()
     
     P5_mean = ckpt['P5_mean']
     P5_std = ckpt['P5_std']
     
-    print("[OK] QNN loaded successfully\n")
+    print(f"[OK] QNN loaded (v2: {nq}q, {nl}l)\n")
     
     # Example pose (end-effector transformation as 12D row)
     # [nx, ny, nz, ox, oy, oz, ax, ay, az, Px, Py, Pz]
@@ -129,9 +131,21 @@ def example_classical_ann_inference():
     print(f"Loading classical ANN from {model_path}...")
     
     # Load checkpoint
-    ckpt = torch.load(model_path, map_location='cpu')
+    ckpt = torch.load(model_path, map_location='cpu', weights_only=False)
     
-    # Reconstruct ShoulderNet architecture
+    # Reconstruct ShoulderNet architecture (matches train_puma560_v4_FINAL.py)
+    class _ResBlock(nn.Module):
+        def __init__(self, dim, dropout=0.05):
+            super().__init__()
+            self.block = nn.Sequential(
+                nn.Linear(dim, dim), nn.LayerNorm(dim), nn.GELU(),
+                nn.Dropout(dropout),
+                nn.Linear(dim, dim), nn.LayerNorm(dim),
+            )
+            self.act = nn.GELU()
+        def forward(self, x):
+            return self.act(x + self.block(x))
+
     class ShoulderNet(nn.Module):
         def __init__(self, n_in=3, hidden=256, n_blocks=6):
             super().__init__()
@@ -139,19 +153,14 @@ def example_classical_ann_inference():
                 nn.Linear(n_in, hidden), nn.LayerNorm(hidden), nn.GELU(),
             )
             self.blocks = nn.ModuleList([
-                nn.Sequential(
-                    nn.Linear(hidden, hidden), nn.LayerNorm(hidden), nn.GELU(),
-                    nn.Dropout(0.05),
-                    nn.Linear(hidden, hidden), nn.LayerNorm(hidden),
-                )
-                for _ in range(n_blocks)
+                _ResBlock(hidden) for _ in range(n_blocks)
             ])
             self.head = nn.Linear(hidden, 6)
         
         def forward(self, x):
             x = self.stem(x)
             for blk in self.blocks:
-                x = blk(x) + x
+                x = blk(x)
             return self.head(x)
     
     model_ann = ShoulderNet(n_in=3, hidden=256, n_blocks=6)
@@ -259,15 +268,17 @@ def example_batch_inference():
         return
     
     print("Loading QNN...")
-    ckpt = torch.load(model_path, map_location='cpu')
-    model = HybridQNN(n_qubits=3, n_vqc_layers=3, classical_hidden=128)
+    ckpt = torch.load(model_path, map_location='cpu', weights_only=False)
+    nq = ckpt.get('n_qubits', 4)
+    nl = ckpt.get('n_qlayers', 3)
+    model = HybridQNN(n_qubits=nq, n_qlayers=nl, hidden=256, n_res_blocks=4)
     model.load_state_dict(ckpt['model_state'])
     model.eval()
     
     P5_mean = ckpt['P5_mean']
     P5_std = ckpt['P5_std']
     
-    print("[OK] Loaded\n")
+    print(f"[OK] Loaded (v2: {nq}q, {nl}l)\n")
     
     # Create batch of random poses
     n_batch = 5
@@ -343,8 +354,10 @@ def example_performance_comparison():
     
     # QNN timing
     if Path(qnn_path).exists():
-        ckpt_qnn = torch.load(qnn_path, map_location='cpu')
-        qnn = HybridQNN(n_qubits=3, n_vqc_layers=3, classical_hidden=128)
+        ckpt_qnn = torch.load(qnn_path, map_location='cpu', weights_only=False)
+        nq = ckpt_qnn.get('n_qubits', 4)
+        nl = ckpt_qnn.get('n_qlayers', 3)
+        qnn = HybridQNN(n_qubits=nq, n_qlayers=nl, hidden=256, n_res_blocks=4)
         qnn.load_state_dict(ckpt_qnn['model_state'])
         qnn.eval()
         
@@ -377,28 +390,33 @@ def example_performance_comparison():
     
     # Classical ANN timing
     if Path(ann_path).exists():
-        ckpt_ann = torch.load(ann_path, map_location='cpu')
+        ckpt_ann = torch.load(ann_path, map_location='cpu', weights_only=False)
         
+        class _ResBlockANN(nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.block = nn.Sequential(
+                    nn.Linear(256, 256), nn.LayerNorm(256), nn.GELU(),
+                    nn.Dropout(0.05),
+                    nn.Linear(256, 256), nn.LayerNorm(256),
+                )
+                self.act = nn.GELU()
+            def forward(self, x):
+                return self.act(x + self.block(x))
+
         class ShoulderNet(nn.Module):
             def __init__(self):
                 super().__init__()
                 self.stem = nn.Sequential(
                     nn.Linear(3, 256), nn.LayerNorm(256), nn.GELU(),
                 )
-                self.blocks = nn.ModuleList([
-                    nn.Sequential(
-                        nn.Linear(256, 256), nn.LayerNorm(256), nn.GELU(),
-                        nn.Dropout(0.05),
-                        nn.Linear(256, 256), nn.LayerNorm(256),
-                    )
-                    for _ in range(6)
-                ])
+                self.blocks = nn.ModuleList([_ResBlockANN() for _ in range(6)])
                 self.head = nn.Linear(256, 6)
             
             def forward(self, x):
                 x = self.stem(x)
                 for blk in self.blocks:
-                    x = blk(x) + x
+                    x = blk(x)
                 return self.head(x)
         
         ann = ShoulderNet()
