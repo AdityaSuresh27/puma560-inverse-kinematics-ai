@@ -33,7 +33,8 @@ try:
     from qnn_puma560 import (
         HybridQNN, angles_to_sc, sc_to_angles, load_dataset,
         compute_wrist_center, normalize_wrist_center,
-        train_qnn, predict_qnn, evaluate_qnn, HAS_PENNYLANE
+        train_qnn, predict_qnn, evaluate_qnn, HAS_PENNYLANE,
+        transfer_ann_weights,
     )
 except ImportError as e:
     print(f"ERROR: Could not import QNN module: {e}")
@@ -124,7 +125,10 @@ def main():
     parser.add_argument("--epochs", type=int, default=200)
     parser.add_argument("--lr", type=float, default=3e-3)
     parser.add_argument("--batch", type=int, default=128)
-    parser.add_argument("--patience", type=int, default=40)
+    parser.add_argument("--patience", type=int, default=100)
+    parser.add_argument("--transfer", action="store_true",
+                        help="Init QNN classical head from trained ANN weights "
+                             "(recommended — starts near ANN accuracy)")
     parser.add_argument("--n-qubits", type=int, default=4,
                         help="Number of qubits (4=fast, 6=more expressive)")
     parser.add_argument("--n-qlayers", type=int, default=3,
@@ -205,16 +209,23 @@ def main():
     # ── [2] Build QNN ──────────────────────────────────────────────────
     print("[2] Building Hybrid QNN v2.0...")
     qnn = HybridQNN(n_qubits=args.n_qubits, n_qlayers=args.n_qlayers,
-                    hidden=256, n_res_blocks=4, dropout=0.05)
+                    hidden=256, n_res_blocks=6, dropout=0.05)
     n_q_params = sum(p.numel() for n, p in qnn.named_parameters()
                      if 'quantum' in n or 'input_scaling' in n)
     n_c_params = sum(p.numel() for n, p in qnn.named_parameters()
                      if 'quantum' not in n and 'input_scaling' not in n)
     n_params = n_q_params + n_c_params
     print(f"  Architecture: Quantum({args.n_qubits}q,{args.n_qlayers}l) "
-          f"+ skip + Classical(256×4 ResBlocks)")
+          f"+ skip + Classical(256×6 ResBlocks)")
     print(f"  Quantum params: {n_q_params:,} | Classical params: {n_c_params:,} "
-          f"| Total: {n_params:,}\n")
+          f"| Total: {n_params:,}")
+
+    if args.transfer:
+        print("  [Transfer] Initialising classical backbone from ANN checkpoint...")
+        ok = transfer_ann_weights(qnn, 'puma560_ann_v4_FINAL.pt')
+        if ok:
+            print("  [Transfer] Differential LR will be used (quantum: lr, classical: lr/100)")
+    print()
     
     # ── [3] Train QNN ──────────────────────────────────────────────────
     print(f"[3] Training QNN ({args.epochs} epochs)...")
@@ -224,7 +235,8 @@ def main():
         qnn, P5_tr_n_train, Y_tr_sc_train, P5_tr_raw_train,
         P5_tr_n_val, Y_tr_sc_val, P5_tr_raw_val,
         epochs=args.epochs, lr=args.lr, batch_size=args.batch,
-        patience=args.patience, device=device
+        patience=args.patience, device=device,
+        transfer_mode=args.transfer,
     )
     
     train_time = time.time() - t_start
@@ -373,6 +385,7 @@ def main():
         'architecture': f'HybridQNN_v2_{args.n_qubits}q_{args.n_qlayers}l',
         'n_qubits': args.n_qubits,
         'n_qlayers': args.n_qlayers,
+        'n_res_blocks': 6,
         'train_time': train_time,
     }, 'puma560_qnn_hybrid_v1.pt')
     

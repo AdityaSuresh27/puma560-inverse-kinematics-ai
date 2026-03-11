@@ -186,26 +186,27 @@ class ResBlock(nn.Module):
 
 class HybridQNN(nn.Module):
     """
-    Hybrid Quantum-Classical NN for PUMA 560 IK (v2).
+    Hybrid Quantum-Classical NN for PUMA 560 IK (v3 — additive correction).
 
     Architecture:
-      input [B,3]  ──┬──  QuantumLayer(data re-uploading VQC)  ──→ [B, n_qubits]
-                      │                                                │
-                      └──────────── skip connection ──────────────→ cat ──→ [B, n_qubits+3]
+      input [B,3]  ──┬──  Classical backbone (= ShoulderNet ANN)  ──→ [B, 6] classical_out
+                      │
+                      └──  Quantum branch                         ──→ [B, 6] q_correction
+                           │  input_scaling → VQC → n_qubits expvals
+                           │  → projection(n_qubits → 6, zero-init)
                                                                           │
-                                                                   Classical Head
-                                                                   (ResNet 256×4)
-                                                                          │
-                                                                     [B, 6]  sin/cos
+                                                          output = classical_out + q_correction
 
-    Key fixes over v1:
-      • Quantum layer is fully differentiable (PennyLane backprop)
-      • Skip connection preserves original input information
-      • Deep residual classical head
+    Key design:
+      • Classical backbone is IDENTICAL to ShoulderNet ANN (3→256→6 ResBlocks→6)
+      • Transfer learning copies ANN weights 1:1 — no shape mismatch
+      • q_proj last layer is zero-initialised → at epoch 0 the model IS the ANN
+      • If quantum learns nothing useful, the model cannot degrade below ANN
+      • Quantum branch only needs to learn a small residual correction
     """
 
     def __init__(self, n_qubits=4, n_qlayers=3, hidden=256,
-                 n_res_blocks=4, dropout=0.05):
+                 n_res_blocks=6, dropout=0.05):
         super().__init__()
         self.n_qubits = n_qubits
         self.n_qlayers = n_qlayers
@@ -213,25 +214,31 @@ class HybridQNN(nn.Module):
         if not HAS_PENNYLANE:
             raise RuntimeError("PennyLane required. Install: pip install pennylane")
 
-        # ── Quantum layer (fully differentiable) ───────────────────────
-        self.quantum_layer = _make_quantum_layer(n_qubits, n_qlayers, n_inputs=3)
-
-        # Learnable input scaling for quantum encoding
-        self.input_scaling = nn.Parameter(torch.ones(3) * 0.5)
-
-        # ── Classical post-processor with skip connection ──────────────
-        classical_in = n_qubits + 3   # quantum features + original input
+        # ── Classical backbone (identical to ShoulderNet ANN) ──────────
         self.stem = nn.Sequential(
-            nn.Linear(classical_in, hidden), nn.LayerNorm(hidden), nn.GELU(),
+            nn.Linear(3, hidden), nn.LayerNorm(hidden), nn.GELU(),
         )
         self.blocks = nn.ModuleList(
             [ResBlock(hidden, dropout) for _ in range(n_res_blocks)]
         )
         self.head = nn.Linear(hidden, 6)    # sin/cos of J1, J2, J3
 
-        # Kaiming init for classical layers
-        for m in self.modules():
-            if isinstance(m, nn.Linear):
+        # ── Quantum correction branch ─────────────────────────────────
+        self.quantum_layer = _make_quantum_layer(n_qubits, n_qlayers, n_inputs=3)
+        self.input_scaling = nn.Parameter(torch.ones(3) * 0.5)
+        self.q_proj = nn.Sequential(
+            nn.Linear(n_qubits, 32), nn.GELU(),
+            nn.Linear(32, 6),
+        )
+
+        # Zero-init the last projection layer → q_correction = 0 at init
+        # This means QNN = ANN exactly at initialisation
+        nn.init.zeros_(self.q_proj[-1].weight)
+        nn.init.zeros_(self.q_proj[-1].bias)
+
+        # Kaiming init for classical backbone
+        for name, m in self.named_modules():
+            if isinstance(m, nn.Linear) and 'q_proj' not in name:
                 nn.init.kaiming_normal_(m.weight, nonlinearity='relu')
                 if m.bias is not None:
                     nn.init.zeros_(m.bias)
@@ -241,18 +248,18 @@ class HybridQNN(nn.Module):
         x: [B, 3]  normalised wrist centre
         Returns: [B, 6]  raw logits (apply tanh externally for sin/cos)
         """
-        # Quantum feature extraction (differentiable)
-        q_input = x * self.input_scaling
-        q_features = self.quantum_layer(q_input)        # [B, n_qubits]
-
-        # Skip connection
-        combined = torch.cat([x, q_features], dim=-1)  # [B, n_qubits + 3]
-
-        # Classical head
-        h = self.stem(combined)
+        # Classical backbone (= ANN)
+        h = self.stem(x)
         for blk in self.blocks:
             h = blk(h)
-        return self.head(h)
+        classical_out = self.head(h)
+
+        # Quantum correction (additive residual)
+        q_input = x * self.input_scaling
+        q_features = self.quantum_layer(q_input)    # [B, n_qubits]
+        q_correction = self.q_proj(q_features)      # [B, 6]
+
+        return classical_out + q_correction
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -384,21 +391,70 @@ def normalize_wrist_center(P5_train, P5_val=None, P5_test=None):
 
 
 # ═══════════════════════════════════════════════════════════════════════
+#  TRANSFER LEARNING  (init QNN classical head from trained ANN)
+# ═══════════════════════════════════════════════════════════════════════
+
+def transfer_ann_weights(qnn_model, ann_checkpoint_path):
+    """
+    Initialise the QNN's classical backbone from a trained ShoulderNet checkpoint.
+
+    Since v3 uses an additive architecture where the classical backbone is IDENTICAL
+    to ShoulderNet (3→256 stem, 6 ResBlocks, head→6), ALL weights copy 1:1.
+    The quantum projection (q_proj) stays zero-init, so at epoch 0 the QNN outputs
+    are exactly the ANN outputs.
+
+    Args:
+        qnn_model: HybridQNN instance
+        ann_checkpoint_path: path to puma560_ann_v4_FINAL.pt
+
+    Returns:
+        True on success, False on failure.
+    """
+    if not Path(ann_checkpoint_path).exists():
+        print(f"  [WARN] ANN checkpoint not found: {ann_checkpoint_path}")
+        return False
+
+    try:
+        ckpt = torch.load(ann_checkpoint_path, map_location='cpu',
+                          weights_only=False)
+        ann_sd = ckpt.get('model_state', ckpt)
+
+        qnn_sd = qnn_model.state_dict()
+        transferred = 0
+
+        for key, val in ann_sd.items():
+            # stem, blocks, head all map 1:1 (shapes are identical)
+            if key in qnn_sd and qnn_sd[key].shape == val.shape:
+                qnn_sd[key] = val.clone()
+                transferred += 1
+
+        qnn_model.load_state_dict(qnn_sd)
+        print(f"  [OK] Transferred {transferred} parameter tensors from ANN → QNN (1:1)")
+        return True
+
+    except Exception as e:
+        print(f"  [WARN] Transfer learning failed: {e}")
+        return False
+
+
+# ═══════════════════════════════════════════════════════════════════════
 #  TRAINING
 # ═══════════════════════════════════════════════════════════════════════
 
 def train_qnn(model, X_train_n, Y_train_sc, P5_train_raw,
               X_val_n, Y_val_sc, P5_val_raw,
-              epochs=200, lr=3e-3, batch_size=128, patience=40,
-              device='cpu'):
+              epochs=200, lr=3e-3, batch_size=128, patience=100,
+              device='cpu', transfer_mode=False):
     """
-    Train hybrid QNN with physics-informed loss and OneCycleLR.
+    Train hybrid QNN with physics-informed loss and CosineAnnealingWarmRestarts.
 
     Args:
         X_train_n / X_val_n:     normalised wrist centres [N,3]
         Y_train_sc / Y_val_sc:   sin/cos targets [N,6]
         P5_train_raw / P5_val_raw: raw wrist centres in mm [N,3]  (for FK loss)
         epochs, lr, batch_size, patience: training hyper-parameters
+        transfer_mode: if True, use differential LR (quantum: lr, classical: lr/100)
+                       to preserve transferred ANN weights
 
     Returns:
         best_state:  state_dict of best model (by val loss)
@@ -416,10 +472,28 @@ def train_qnn(model, X_train_n, Y_train_sc, P5_train_raw,
     )
 
     optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=5e-5)
-    n_steps = epochs * max(1, len(loader))
-    scheduler = torch.optim.lr_scheduler.OneCycleLR(
-        optimizer, max_lr=lr, total_steps=n_steps,
-        pct_start=0.05, anneal_strategy='cos',
+
+    if transfer_mode:
+        # Differential LR: quantum branch trains aggressively,
+        # classical backbone barely moves (already good from ANN).
+        quantum_names = {'quantum_layer', 'input_scaling', 'q_proj'}
+        q_params, c_params = [], []
+        for name, p in model.named_parameters():
+            if any(qn in name for qn in quantum_names):
+                q_params.append(p)
+            else:
+                c_params.append(p)
+        optimizer = torch.optim.AdamW([
+            {'params': q_params, 'lr': lr},           # quantum: full LR
+            {'params': c_params, 'lr': lr * 0.01},    # classical: 100× smaller
+        ], weight_decay=5e-5)
+        print(f"  [Diff LR] quantum={lr:.1e}, classical={lr*0.01:.1e}")
+
+    # CosineAnnealingWarmRestarts: period T_0=100 epochs, doubles each restart.
+    # LR profile is INDEPENDENT of total epoch count — avoids the OneCycleLR
+    # bug where long runs had a 150-epoch warmup and never converged.
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(
+        optimizer, T_0=100, T_mult=2, eta_min=lr * 1e-3,
     )
     criterion = DecoupledIKLoss(w_sc=1.0, w_wc=2.0, w_circ=0.05)
 
@@ -441,10 +515,11 @@ def train_qnn(model, X_train_n, Y_train_sc, P5_train_raw,
             loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
             optimizer.step()
-            scheduler.step()
             train_loss += loss.item() * len(xb)
 
         train_loss /= len(X_tr_t)
+        # Step CosineAnnealingWarmRestarts once per epoch (not per batch)
+        scheduler.step(ep - 1)
 
         model.eval()
         with torch.no_grad():

@@ -104,7 +104,8 @@ else:
     ckpt_q = torch.load(qnn_path, map_location='cpu', weights_only=False)
     nq = ckpt_q.get('n_qubits', 4)
     nl = ckpt_q.get('n_qlayers', 3)
-    qnn_model = HybridQNN(n_qubits=nq, n_qlayers=nl)
+    nr = ckpt_q.get('n_res_blocks', 6)
+    qnn_model = HybridQNN(n_qubits=nq, n_qlayers=nl, n_res_blocks=nr)
     qnn_model.load_state_dict(ckpt_q['model_state'])
     qnn_model.eval()
 
