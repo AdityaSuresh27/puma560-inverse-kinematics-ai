@@ -81,7 +81,7 @@ Both models predict sin/cos of J1, J2, J3 (6 outputs) from the normalised wrist 
 - Strong convergence with best validation epoch at **196** out of 200.
 
 ### Comparison with Classical ANN
-- Classical ANN achieves **0.0620°** avg MAE — **251% worse** than the QNN.
+- Classical ANN achieves **0.0620°** avg MAE — **251% better** than the QNN.
 - The accuracy gap is primarily due to:
   1. **Classical simulation overhead**: PennyLane simulates the quantum circuit on CPU, limiting usable batch size and total training epochs.
   2. **Fewer effective epochs**: QNN trains for 200 epochs (limited by ~6 s/epoch); ANN runs for up to 3000 epochs.
