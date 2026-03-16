@@ -1,145 +1,144 @@
-# full6dof_ann_cpu Technical Report
+# Review 3A - PUMA 560 Full 6-DOF ANN Pipeline (Code-Verified)
 
-## 1. Scope
-This folder implements a CPU-only inverse kinematics pipeline for PUMA 560 where:
-- J1-J3 are learned by a neural network from wrist-center Cartesian coordinates.
-- J4-J6 are solved analytically from rotation decomposition.
+**Date:** March 16, 2026
+**Task:** Verify whether the folder implements pure neural prediction or hybrid analytical IK, then document the complete technical process and model details.
+**Scope boundary:** Only artifacts and code under `full6dof_ann_cpu` (and its own generated checkpoints/results) are used; parent-folder models are excluded.
 
-The trainer is `train_ann_full6_cpu.py` and the evaluator/plotter is `visualize_ann_full6_cpu.py`.
+---
 
-## 2. Data Contract and Preprocessing
-Source dataset: `../puma560_dataset.csv`
+## 1. Verification Outcome
 
-Column contract used by code:
-- Input pose (12): `[nx, ny, nz, ox, oy, oz, ax, ay, az, Px, Py, Pz]`
-- Target joints (6): `[theta1, theta2, theta3, theta4, theta5, theta6]` in degrees
+This folder does **not** perform end-to-end 6-joint prediction by ANN only.
 
-Preprocessing sequence:
-1. Load CSV and validate at least 18 columns.
-2. Compute wrist center from pose:
-   - `P5 = [Px - D6*ax, Py - D6*ay, Pz - D6*az]`
-   - `D6 = 56.5` from DH constants.
-3. Deterministic split with seed:
-   - train: 75%
-   - val: 10%
-   - test: 15%
-4. Standardize wrist-center input using train statistics only:
-   - `Xn = (X - mean_train) / std_train`
-5. Convert only J1-J3 target angles to sin/cos pairs:
-   - output target dimension becomes 6: `[sin(t1), cos(t1), sin(t2), cos(t2), sin(t3), cos(t3)]`
+- The ANN learns only shoulder joints J1-J3 in sin/cos form (6 outputs total).
+- J4-J6 are reconstructed analytically from $T_{36} = T_{03}^{-1} T_{06}$ during evaluation.
+- Analytical geometry is used in both training loss (wrist-center FK consistency) and final reconstruction.
 
-## 3. Model Architecture (FullIKANN)
-Runtime model build in training uses CLI defaults:
-- `n_in = 3`
-- `hidden = 384`
-- `n_blocks = 6`
-- `dropout = 0.05`
-- `n_out = 6`
+Verified implementation points:
 
-Architecture graph:
-1. Stem:
-   - `Linear(3 -> 384)`
-   - `LayerNorm(384)`
-   - `GELU`
-2. Residual trunk: 6 identical `ResBlock(384)` modules
-   - Block internal path:
-     - `Linear(384 -> 384)`
-     - `LayerNorm(384)`
-     - `GELU`
-     - `Dropout(0.05)`
-     - `Linear(384 -> 384)`
-     - `LayerNorm(384)`
-   - Residual combine and activation:
-     - `output = GELU(input + block(input))`
-3. Head:
-   - `Linear(384 -> 6)` for J1-J3 sin/cos prediction.
+- Wrist-center feature extraction: $P_5 = [P_x - d_6 a_x,\; P_y - d_6 a_y,\; P_z - d_6 a_z]$.
+- Shoulder-only target encoding: $[\sin J_1, \cos J_1, \sin J_2, \cos J_2, \sin J_3, \cos J_3]$.
+- Wrist solve uses closed-form angle extraction with singular-case branch for $\sin(J_5) \approx 0$.
 
-Layer counts with training defaults (`hidden=384`, `blocks=6`):
-- Trainable linear layers: 14 (1 stem + 12 in residual blocks + 1 head)
-- LayerNorm layers: 13 (1 stem + 12 in residual blocks)
-- Trainable parameters: 1,787,910
+---
 
-Note on class constructor defaults:
-- Class-level defaults are `hidden=512`, `n_blocks=8`, which would give 4,225,030 parameters.
-- Actual training defaults come from CLI (`hidden=384`, `blocks=6`).
+## 2. Problem Setup
 
-## 4. Objective Function and Physics Coupling
-The loss module is `FullIKLoss` and combines three terms.
+| Item | Value |
+|------|-------|
+| Dataset file | `../puma560_dataset.csv` |
+| Input pose columns | `[nx, ny, nz, ox, oy, oz, ax, ay, az, Px, Py, Pz]` |
+| Ground-truth joints | `[J1, J2, J3, J4, J5, J6]` in degrees |
+| Learned input to model | Wrist center $P_5 \in \mathbb{R}^3$ |
+| Learned output | 6 values = sin/cos for J1-J3 |
+| Split | Train 75%, Val 10%, Test 15% |
+| Seed | 42 |
 
-1. Sin/cos regression loss:
-- Normalize each predicted pair `(sin, cos)` to unit norm.
-- `L_sc = SmoothL1(pred_sc, target_sc, beta=0.05)`
+---
 
-2. Wrist-center physics loss:
-- Decode J1-J3 from predicted sin/cos via `atan2`.
-- Forward-kinematics `T03` from DH chain for first three joints.
-- Predict wrist center using FK geometry:
-  - `p5_pred = T03[:3,3] + D4 * T03[:3,2]`
-  - `D4 = 431.8`
-- `L_wc = MSE(p5_pred / R_WORKSPACE, p5_true / R_WORKSPACE)`
-- `R_WORKSPACE = 900`
+## 3. ANN Architecture (FullIKANN)
 
-3. Unit-circle regularization:
-- For each joint pair: `(sin^2 + cos^2 - 1)^2`
-- `L_circ = average over J1..J3`
+### 3.1 Checkpoint-verified training configuration
 
-Total:
-- `L_total = w_sc*L_sc + w_pos*L_wc + w_circ*L_circ`
-- Default weights: `w_sc=1.0`, `w_pos=2.0`, `w_circ=0.02`
+| Hyperparameter | Value |
+|---------------|-------|
+| Input dim | 3 |
+| Hidden width | 384 |
+| Residual blocks | 6 |
+| Dropout | 0.05 |
+| Output dim | 6 |
+| Trainable parameters | 1,787,910 |
 
-## 5. Training Process (Step-by-Step)
-1. Seed Python, NumPy, and Torch.
-2. Force CPU device.
-3. Build dataloaders from normalized wrist-center features and shoulder sin/cos targets.
-4. Build `FullIKANN`.
-5. Optimizer: `AdamW(lr=1e-3, weight_decay=5e-5)`.
-6. Scheduler: `CosineAnnealingWarmRestarts(T_0=200, T_mult=2, eta_min=lr*1e-3)`.
-7. Per mini-batch:
-   - Forward model.
-   - Compute composite loss.
-   - Skip batch if loss is non-finite.
-   - Backprop + gradient clipping (`clip_norm=1.0`).
-8. End-of-epoch validation on the same objective terms.
-9. Monitor value is `val_sc` (shoulder sin/cos term).
-10. Save checkpoints atomically:
-   - `ann6_last.pt` every save interval
-   - `ann6_best.pt` when monitor improves
-11. Early stop after `min_epochs` and `patience` without monitor improvement.
-12. Reload best checkpoint for final test evaluation.
-13. Save:
-   - `checkpoints/ann6_final.pt`
-   - `ann6_eval_results.npz`
-   - plots (if matplotlib available)
+### 3.2 Layer structure
 
-Safety controls implemented:
-- Resume support.
-- Atomic checkpoint writes with retry and recovery fallback.
-- Non-finite loss skip.
-- KeyboardInterrupt emergency checkpoint save.
+1. Stem: `Linear(3 -> 384)` + `LayerNorm` + `GELU`
+2. Trunk: 6 `ResBlock(384)` modules
+3. Head: `Linear(384 -> 6)`
 
-## 6. Inference and Full 6-DOF Reconstruction
-At evaluation time:
-1. ANN predicts J1-J3 as sin/cos.
-2. Convert to angles with `atan2(sin, cos)`.
-3. Build target `T06` from the 12 pose columns.
-4. Compute `T36 = inv(T03) @ T06`.
-5. Solve wrist analytically:
-   - `theta5 = atan2(sin5, T36[2,2])`
-   - `theta4 = atan2(T36[1,2], T36[0,2])`
-   - `theta6 = atan2(T36[2,1], -T36[2,0])`
-6. Handle near-singular wrist when `sin5` is near zero.
-7. Build full prediction `[J1..J6]`.
-8. Compute wrapped angular error:
-   - `err = (pred - true + 180) % 360 - 180`
+Each residual block contains:
 
-Metrics computed:
-- Per-joint MAE and RMSE
-- Average MAE and RMSE
-- Joint-wise and all-joint threshold accuracies for `{0.1, 0.25, 0.5, 1.0, 2.0}` degrees
+- `Linear(384 -> 384)`
+- `LayerNorm(384)`
+- `GELU`
+- `Dropout(0.05)`
+- `Linear(384 -> 384)`
+- `LayerNorm(384)`
+- Residual add + `GELU`
 
-## 7. Artifacts Produced in This Folder
-- Training script: `train_ann_full6_cpu.py`
-- Evaluation script: `visualize_ann_full6_cpu.py`
-- Checkpoints: `checkpoints/ann6_best.pt`, `checkpoints/ann6_last.pt`, `checkpoints/ann6_final.pt`
-- Metrics archive: `ann6_eval_results.npz`, `ann6_eval_results_visualized.npz`
-- Plots: `training_history_full6.png`, `joint_metrics_full6.png`, `error_histograms_full6.png`, `pred_vs_true_full6.png`
+Layer counts for the trained ANN:
+
+- Linear layers: 14
+- LayerNorm layers: 13
+
+---
+
+## 4. Loss Formulation and Analytical Coupling
+
+The objective is:
+
+$$
+L = w_{sc} L_{sc} + w_{wc} L_{wc} + w_{circ} L_{circ}
+$$
+
+with defaults $w_{sc}=1.0$, $w_{wc}=2.0$, $w_{circ}=0.02$.
+
+1. $L_{sc}$: SmoothL1 on normalized sin/cos pairs for J1-J3.
+2. $L_{wc}$: MSE wrist-center physics constraint from differentiable FK of first 3 joints:
+   $p_{5,pred} = p_{03} + d_4 z_{03}$.
+3. $L_{circ}$: unit-circle regularizer on each sin/cos pair.
+
+This confirms analytical kinematics is embedded in the training objective, not only in post-processing.
+
+---
+
+## 5. End-to-End Process (Step-by-Step)
+
+1. Load CSV and validate column count.
+2. Compute wrist center from pose and $d_6$.
+3. Split with deterministic permutation.
+4. Normalize wrist-center inputs using training mean/std.
+5. Encode J1-J3 to sin/cos targets.
+6. Train ANN on CPU with AdamW and cosine warm restarts.
+7. Apply gradient clipping and non-finite loss guard.
+8. Save atomic `last` and `best` checkpoints.
+9. Early-stop by validation shoulder sin/cos loss monitor.
+10. Evaluate best model on test set:
+    - Decode J1-J3 from sin/cos.
+    - Build $T_{06}$ from pose columns.
+    - Solve J4-J6 analytically from $T_{36}$.
+11. Compute wrapped angle errors and aggregate metrics.
+12. Save checkpoint, NPZ metrics, and plots.
+
+---
+
+## 6. Test Results (Saved Artifact: ann6_eval_results.npz)
+
+### 6.1 Per-joint MAE/RMSE (degrees)
+
+| Joint | MAE | RMSE |
+|------|----:|-----:|
+| J1 | 0.1603 | 0.5370 |
+| J2 | 0.1319 | 0.2395 |
+| J3 | 0.2227 | 0.4504 |
+| J4 | 0.4304 | 3.5820 |
+| J5 | 0.1323 | 0.2936 |
+| J6 | 0.4277 | 3.5791 |
+| **Average** | **0.2509** | **1.4469** |
+
+### 6.2 All-joint threshold accuracy
+
+| Criterion | Accuracy |
+|----------|---------:|
+| All joints <= 0.5 deg | 81.40% |
+| All joints <= 1.0 deg | 90.40% |
+| All joints <= 2.0 deg | 95.87% |
+
+---
+
+## 7. Technical Takeaway
+
+This ANN folder is a **decoupled IK pipeline**, not a pure 6-output direct regressor.
+
+- Learned part: J1-J3 shoulder mapping from wrist center.
+- Analytical part: J4-J6 wrist extraction from rigid-body transforms.
+- Therefore, analytical kinematics is actively used and is required for full 6-DOF output generation.
