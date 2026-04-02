@@ -111,10 +111,10 @@ python train_qnn_and_compare.py --epochs 500 --batch 256
 ```python
 import torch
 import numpy as np
-from qnn_puma560 import HybridQNN, compute_wrist_center, normalize_wrist_center, sc_to_angles
+from puma560_3dof.qnn_puma560 import HybridQNN, compute_wrist_center, normalize_wrist_center, sc_to_angles
 
 # Load trained model
-ckpt = torch.load('puma560_qnn_hybrid_v1.pt')
+ckpt = torch.load('puma560_3dof/puma560_qnn_hybrid_v1.pt')
 model = HybridQNN(n_qubits=3, n_vqc_layers=3, classical_hidden=128)
 model.load_state_dict(ckpt['model_state'])
 model.eval()
@@ -146,6 +146,7 @@ print(f"Predicted joint angles: J1={J1:.2f}° J2={J2:.2f}° J3={J3:.2f}°")
 
 ### Source Files
 ```
+puma560_3dof/
 ├── qnn_puma560.py                    Main QNN implementation
 ├── train_qnn_and_compare.py         Training script + comparison
 ├── train_puma560.py                  Classical ANN training

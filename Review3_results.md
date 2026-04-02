@@ -37,7 +37,7 @@ Both models predict sin/cos of J1, J2, J3 (6 outputs) from the normalised wrist 
 
 | Setting | Hybrid QNN | Classical ANN |
 |---------|-----------|---------------|
-| Dataset | puma560_dataset.csv (10,000 samples) | same |
+| Dataset | `data/puma560_dataset.csv` (10,000 samples) | same |
 | Train / Val / Test split | 7650 / 850 / 1500 | same |
 | Epochs | 200 | 3000 |
 | Batch size | 128 | 256 |

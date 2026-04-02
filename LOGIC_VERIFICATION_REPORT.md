@@ -28,10 +28,10 @@ All three implementations use identical PUMA 560 DH parameters:
 | 6    | 0      | 56.50  | 0       | ✅ All match |
 
 **Files verified:**
-- `fPUMA.m`: Lines 35-37
-- `iPUMA.m`: Lines 55-57
-- `train_puma560.py`: Lines 118-125
-- `dataset_generator.m`: Uses `fPUMA.m` and `iPUMA.m`
+- `matlab/fPUMA.m`: Lines 35-37
+- `matlab/iPUMA.m`: Lines 55-57
+- `puma560_3dof/train_puma560.py`: Lines 118-125
+- `matlab/dataset_generator.m`: Uses `fPUMA.m` and `iPUMA.m`
 
 ---
 
@@ -64,7 +64,7 @@ Stage 2: Analytical Solution
 4. Orientation error = decoupled (can solve analytically exactly)
 
 **Data flow verification:**
-- `train_puma560.py` line 920-944: Correctly extracts P5 from X_all and passes P5_tr_n (3D) to ShoulderNet ✅
+- `puma560_3dof/train_puma560.py` line 920-944: Correctly extracts P5 from X_all and passes P5_tr_n (3D) to ShoulderNet ✅
 - Targets are Y_tr[:,:3] converted to sin/cos ✅
 
 ---
@@ -72,7 +72,7 @@ Stage 2: Analytical Solution
 ## 3. WRIST CENTER CALCULATION ✅
 **Status: VERIFIED CORRECT**
 
-In `train_puma560.py`, line 416-442 (DecoupledIKLoss):
+In `puma560_3dof/train_puma560.py`, line 416-442 (DecoupledIKLoss):
 ```python
 P5_pred = T03[:, :3, 3] + D4 * T03[:, :3, 2]
 ```
@@ -88,7 +88,7 @@ P5_pred = T03[:, :3, 3] + D4 * T03[:, :3, 2]
 ## 4. DATASET CONSISTENCY ✅
 **Status: VERIFIED - One Note Below**
 
-### CSV Structure
+### CSV Structure (`data/puma560_dataset.csv`)
 - Columns: 12 pose (nx,ny,nz,ox,oy,oz,ax,ay,az,Px,Py,Pz) + 6 joints + 1 config = 19 total ✅
 - 10,000 samples total ✅
 - Split: 70% train (7000), 15% val (1500), 15% test (1500) ✅

@@ -47,8 +47,8 @@ This project develops inverse kinematics solvers for the PUMA 560 6-DOF robot ma
 ### For Running Examples (10 minutes)
 → **Run these Python scripts:**
 ```bash
-python qnn_inference_example.py       # 5 usage examples
-python train_qnn_and_compare.py       # Full training + comparison
+python puma560_3dof/qnn_inference_example.py       # 5 usage examples
+python puma560_3dof/train_qnn_and_compare.py       # Full training + comparison
 ```
 
 ---
@@ -85,7 +85,7 @@ python train_qnn_and_compare.py       # Full training + comparison
 
 ### QNN Implementation
 ```
-qnn_puma560.py                    (720 lines)
+puma560_3dof/qnn_puma560.py                    (720 lines)
 ├─ QuantumFeatureMap             Angle encoding on 3 qubits
 ├─ VariationalQuantumCircuit      Trained quantum layer
 ├─ HybridQNN                      Complete model
@@ -94,7 +94,7 @@ qnn_puma560.py                    (720 lines)
 
 ### Training & Comparison
 ```
-train_qnn_and_compare.py          (400 lines)
+puma560_3dof/train_qnn_and_compare.py          (400 lines)
 ├─ QNN architecture setup
 ├─ Classical ANN loader
 ├─ Training loop

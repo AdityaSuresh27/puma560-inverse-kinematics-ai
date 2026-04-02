@@ -42,10 +42,10 @@ pip install torch numpy matplotlib scipy scikit-learn
 
 ### Step 3: Verify Dataset
 
-Check that `puma560_dataset.csv` exists (10000 rows, 19 columns):
+Check that `data/puma560_dataset.csv` exists (10000 rows, 19 columns):
 ```bash
-wc -l puma560_dataset.csv  # Should show 10001 (including header)
-head -1 puma560_dataset.csv
+wc -l data/puma560_dataset.csv  # Should show 10001 (including header)
+head -1 data/puma560_dataset.csv
 ```
 
 ---
@@ -55,7 +55,7 @@ head -1 puma560_dataset.csv
 ### Step 1: Train the QNN
 
 ```bash
-python train_qnn_and_compare.py --epochs 500
+python puma560_3dof/train_qnn_and_compare.py --epochs 500
 ```
 
 **What happens:**
@@ -63,7 +63,7 @@ python train_qnn_and_compare.py --epochs 500
 - Splits: 70% train, 30% test
 - Trains hybrid QNN (3 qubits, 3 layers) with Adam optimizer
 - Compares against classical ANN
-- Saves: `puma560_qnn_hybrid_v1.pt`
+- Saves: `puma560_3dof/puma560_qnn_hybrid_v1.pt`
 - Generates comparison plots
 
 **Expected output:**

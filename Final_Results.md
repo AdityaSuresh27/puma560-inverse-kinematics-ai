@@ -67,7 +67,7 @@ def ResBlock(x):
 ```
 
 ### Training Details
-- **Dataset:** 10,000 PUMA 560 IK samples (generated from inverse kinematics)
+- **Dataset:** 10,000 PUMA 560 IK samples from `data/puma560_dataset.csv`
 - **Train/Val/Test split:** 7,650 / 850 / 1,500 samples
 - **Loss function:** `DecoupledIKLoss` = MSE(sin/cos) + λ₁·FK_loss + λ₂·unit_circle_penalty
   - FK loss: Back-propagates through forward kinematics (ensures joint angles produce correct wrist position)
