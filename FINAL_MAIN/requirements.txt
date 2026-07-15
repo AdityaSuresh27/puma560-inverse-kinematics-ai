@@ -1,0 +1,28 @@
+# Core scientific stack
+# NOTE: numpy must be <2 — roboticstoolbox-python is compiled against NumPy 1.x C API
+# and will fail with 'numpy.core.multiarray failed to import' on NumPy 2.x
+numpy>=1.24,<2
+scipy>=1.10
+pandas>=2.0
+matplotlib>=3.7
+tqdm>=4.65
+
+# Robotics toolbox (PUMA 560 model + analytical IK)
+roboticstoolbox-python>=1.1.0
+spatialmath-python>=1.0.0
+
+# Deep learning
+torch>=2.0.0
+
+# Normalising flows (FrEIA — Framework for Easily Invertible Architectures)
+FrEIA>=0.2
+
+# Data storage
+h5py>=3.8
+
+# Testing
+pytest>=7.3
+pytest-cov>=4.0
+
+# Utilities
+pyyaml>=6.0

@@ -1,0 +1,7 @@
+evaluation summary
+timestamp_utc: 2026-05-11T20:54:56.718228+00:00
+config: {'n_eval': 300, 'n_samples': 25, 'seed': 123, 'device': 'cpu', 'max_refine_candidates': 20, 'hist_bins': 30}
+rows_written_raw: 300
+rows_written_full: 300
+raw: {'n': 300, 'solve_rate': 0.18, 'pos_mean': 0.624975297188904, 'pos_p95': 0.9239983901188952, 'rot_mean': 0.42363668991669967, 'lat_p95': 409.0408049756661}
+full: {'n': 300, 'solve_rate': 0.9666666666666667, 'pos_mean': 0.08004621969409682, 'pos_p95': 0.8521535239333411, 'rot_mean': 0.04187253056618256, 'lat_p95': 1046.446584965452}
