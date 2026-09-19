@@ -58,7 +58,6 @@ So every learned model in this repo only has to predict **J1, J2, J3** (encoded 
 └── README.md                     # You are here
 ```
 
-> **Caveat:** I was not able to browse into `FINAL_MAIN/`, `full6dof_ann_cpu/`, `full6dof_direct_ml_cpu/`, `full6dof_hybrid_qnn_cpu/`, or `matlab/` — GitHub blocks automated access to its folder-listing pages, and I only have the file names as they appear in the root directory listing, not their contents. The descriptions above (e.g. "full 6-DOF experiments", "direct end-to-end ML") are **inferred from the folder names alone**, not confirmed by reading any file inside them. Please open these folders yourself before relying on that framing — the only subfolder whose contents I've actually verified (via `Final_Results.md`, `Review3_results.md`, `README_QNN.md`, and `LOGIC_VERIFICATION_REPORT.md`, which quote specific files and line numbers from it) is `puma560_3dof/`.
 
 ---
 
@@ -118,8 +117,6 @@ pip install torch pennylane numpy pandas scipy matplotlib scikit-learn tqdm
 
 ### Quick Start — train and compare the QNN against the ANN
 
-> ⚠️ **The repo's own docs disagree on whether you run this from the repo root or from inside `puma560_3dof/`,** and I could not open the folder to check directly. `INDEX.md`'s usage examples invoke scripts from the root with a path prefix (`python puma560_3dof/train_qnn_and_compare.py`, bare `from qnn_puma560 import ...`), while `README_QNN.md`'s usage examples import as `from puma560_3dof.qnn_puma560 import ...` and load `puma560_3dof/puma560_qnn_hybrid_v1.pt` — also implying root, but with a different import style. Try running from the repo root first; if that fails on the import, `cd puma560_3dof` and retry.
-
 ```bash
 python train_qnn_and_compare.py --epochs 3000 --n-qubits 4 --n-qlayers 3 --transfer
 ```
@@ -155,15 +152,9 @@ For a guided walkthrough see **`QUICK_START_QNN.md`** (5 min), or the full **`RE
 
 ## Known Limitations / Open Issues
 
-**On this README's own accuracy:** everything above is sourced from the repo's root-level markdown docs (`INDEX.md`, `README_QNN.md`, `Final_Results.md`, `Review3_results.md`, `LOGIC_VERIFICATION_REPORT.md`), cross-checked against each other. I was not able to open `puma560_3dof/`, `FINAL_MAIN/`, `full6dof_*/`, or `matlab/` to check the actual source code against what the docs claim — GitHub blocks automated folder-browsing here, and I don't have a way around that in this environment. Where the docs contradicted each other (the dataset split, and how to invoke the training script) I've flagged it explicitly above rather than picking one silently. Treat this README as a faithful summary of the project's *documentation*, not an independently-verified account of its *code*.
-
 From the project's own logic-verification audit (`LOGIC_VERIFICATION_REPORT.md`):
 - `train_puma560.py` and `train_puma560_v4_FINAL.py` appear to be near-duplicate files — worth consolidating.
 - The MATLAB dataset generator supports multiple IK configurations (`preferred_configs = [1,2,3,4]`) but the shipped dataset only ever used Config 1 (100%) — either intentional or worth regenerating for diversity.
 - FK-consistency validation during data generation only checks **position** error, not full orientation/rotation error.
 - The QNN currently only has a quantum-hardware advantage story for the future — on classical simulators it's slower per-sample (~7 ms vs ~0.3 ms for the classical ANN) despite the accuracy win.
 - This is a decoupled-IK approach specific to robots like the PUMA 560 with spherical wrists; a fully coupled 6-DOF arm would need a different formulation (see the `full6dof_*` folders for that direction).
-
-## License
-
-MIT License (per `INDEX.md` / `README_QNN.md`) — confirm a `LICENSE` file is present at the repo root if you intend this for redistribution.
